@@ -1,23 +1,17 @@
 import os, sys, socket, struct, select, time, signal
 import threading
 from queue import Queue
+from argparse import ArgumentParser
 
-if sys.platform == "win32":
-    # On Windows, the best timer is time.clock()
-    default_timer = time.clock
-else:
-    # On most other platforms the best timer is time.time()
-    default_timer = time.time
+default_timer = time.clock
+print_lock = threading.Lock()
+stateList = []
 
-# =============================================================================#
-# ICMP parameters
-
-ICMP_ECHOREPLY = 0  # Echo reply (per RFC792)
-ICMP_ECHO = 8  # Echo request (per RFC792)
+ICMP_ECHOREPLY = 0  # Echo reply
+ICMP_ECHO = 8  # Echo request
 ICMP_MAX_RECV = 2048  # Max size of incoming buffer
 
 MAX_SLEEP = 1000
-
 
 class Status:
     thisIP = "0.0.0.0"
@@ -28,17 +22,7 @@ class Status:
     totTime = 0
     fracLoss = 1.0
 
-  # Used globally
-
-
-# =============================================================================#
 def checksum(source_string):
-    """
-    A port of the functionality of in_cksum() from ping.c
-    Ideally this would act on the string as a series of 16-bit ints (host
-    packed), but this works.
-    Network data is big-endian, hosts are typically little-endian
-    """
     countTo = (int(len(source_string) / 2)) * 2
     sum = 0
     count = 0
@@ -72,14 +56,7 @@ def checksum(source_string):
 
     return answer
 
-
-# =============================================================================#
-def do_one(destIP, timeout, mySeqNumber, numDataBytes):
-    """
-    Returns either the delay (in ms) or None on timeout.
-    """
-    global myStats
-
+def do_one(destIP, timeout, mySeqNumber, numDataBytes, myStats):
     delay = None
 
     try:  # One could use UDP here, but it's obscure
@@ -103,9 +80,10 @@ def do_one(destIP, timeout, mySeqNumber, numDataBytes):
 
     if recvTime:
         delay = (recvTime - sentTime) * 1000
-        print("%d bytes from %s: icmp_seq=%d ttl=%d time=%d ms" % (
-            dataSize, socket.inet_ntoa(struct.pack("!I", iphSrcIP)), icmpSeqNumber, iphTTL, delay)
-              )
+        with print_lock:
+            print("%d bytes from %s: icmp_seq=%d ttl=%d time=%d ms" % (
+                dataSize, socket.inet_ntoa(struct.pack("!I", iphSrcIP)), icmpSeqNumber, iphTTL, delay)
+                  )
         myStats.pktsRcvd += 1
         myStats.totTime += delay
         if myStats.minTime > delay:
@@ -114,16 +92,12 @@ def do_one(destIP, timeout, mySeqNumber, numDataBytes):
             myStats.maxTime = delay
     else:
         delay = None
-        print("Request timed out.")
+        with print_lock:
+            print("Request timed out.")
 
     return delay
 
-
-# =============================================================================#
 def send_one_ping(mySocket, destIP, myID, mySeqNumber, numDataBytes):
-    """
-    Send one ping to the given >destIP<.
-    """
     destIP = socket.gethostbyname(destIP)
 
     # Header is type (8), code (8), checksum (16), id (16), sequence (16)
@@ -141,10 +115,8 @@ def send_one_ping(mySocket, destIP, myID, mySeqNumber, numDataBytes):
     data = bytes(padBytes)
 
     # Calculate the checksum on the data and the dummy header.
-    myChecksum = checksum(header + data)  # Checksum is in network order
+    myChecksum = checksum(header + data)
 
-    # Now that we have the right checksum, we put that in. It's just easier
-    # to make up a new header than to stuff it into the dummy.
     header = struct.pack(
         "!BBHHH", ICMP_ECHO, 0, myChecksum, myID, mySeqNumber
     )
@@ -161,12 +133,8 @@ def send_one_ping(mySocket, destIP, myID, mySeqNumber, numDataBytes):
 
     return sendTime
 
-
-# =============================================================================#
 def receive_one_ping(mySocket, myID, timeout):
-    """
-    Receive the ping from the socket. Timeout = in ms
-    """
+
     timeLeft = timeout / 1000
 
     while True:  # Loop while waiting for packet or timeout
@@ -202,112 +170,96 @@ def receive_one_ping(mySocket, myID, timeout):
             return None, 0, 0, 0, 0
 
 
-# =============================================================================#
-def dump_stats():
-    """
-    Show stats when pings are done
-    """
-    global myStats
+def dump_stats(myStats):
+    with print_lock:
+        print("\n----%s PYTHON PING Statistics----" % (myStats.thisIP))
 
-    print("\n----%s PYTHON PING Statistics----" % (myStats.thisIP))
+        if myStats.pktsSent > 0:
+            myStats.fracLoss = (myStats.pktsSent - myStats.pktsRcvd) / myStats.pktsSent
 
-    if myStats.pktsSent > 0:
-        myStats.fracLoss = (myStats.pktsSent - myStats.pktsRcvd) / myStats.pktsSent
-
-    print("%d packets transmitted, %d packets received, %0.1f%% packet loss" % (
-        myStats.pktsSent, myStats.pktsRcvd, 100.0 * myStats.fracLoss
-    ))
-
-    if myStats.pktsRcvd > 0:
-        print("round-trip (ms)  min/avg/max = %d/%0.1f/%d" % (
-            myStats.minTime, myStats.totTime / myStats.pktsRcvd, myStats.maxTime
+        print("%d packets transmitted, %d packets received, %0.1f%% packet loss" % (
+            myStats.pktsSent, myStats.pktsRcvd, 100.0 * myStats.fracLoss
         ))
 
-    print()
+        if myStats.pktsRcvd > 0:
+            print("round-trip (ms)  min/avg/max = %d/%0.1f/%d" % (
+                myStats.minTime, myStats.totTime / myStats.pktsRcvd, myStats.maxTime
+            ))
+
+        print()
     return
 
 
-# =============================================================================#
 def signal_handler(signum, frame):
-    """
-    Handle exit via signals
-    """
-    dump_stats()
-    print("\n(Terminated with signal %d)\n" % (signum))
+
+    for i in stateList:
+        dump_stats(i)
+
     sys.exit(0)
 
-
-# =============================================================================#
-def verbose_ping(hostname, timeout=1000, count=3, numDataBytes=55):
-    myStats = Status
-
-    signal.signal(signal.SIGINT, signal_handler)
-    if hasattr(signal, "SIGBREAK"):
-        signal.signal(signal.SIGBREAK, signal_handler)
-
+def verbose_ping(hostname, numDataBytes=55):
     myStats = Status()
+    stateList.append(myStats)
 
-    mySeqNumber = 0  # Starting value
-
+    mySeqNumber = 0
     try:
         destIP = socket.gethostbyname(hostname)
-        print("\nPYTHON PING %s (%s): %d data bytes" % (hostname, destIP, numDataBytes))
+        with print_lock:
+           print("\nPYTHON PING %s (%s): %d data bytes" % (hostname, destIP, numDataBytes))
     except socket.gaierror as e:
-        print("\nPYTHON PING: Unknown host: %s (%s)" % (hostname, e.args[1]))
-        print()
+        with print_lock:
+          print("\nPYTHON PING: Unknown host: %s (%s)" % (hostname, e.args[1]))
+          print()
         return
 
     myStats.thisIP = destIP
 
-    for i in range(count):
-        delay = do_one(destIP, timeout, mySeqNumber, numDataBytes)
-
+    for i in range(5):
+        delay = do_one(destIP, timeout, mySeqNumber, numDataBytes, myStats = myStats)
         if delay == None:
             delay = 0
-
         mySeqNumber += 1
 
-        # Pause for the remainder of the MAX_SLEEP period (if applicable)
         if (MAX_SLEEP > delay):
             time.sleep((MAX_SLEEP - delay) / 1000)
 
-    dump_stats()
-
-
-# =============================================================================#
 def threader():
     while True:
         worker = q.get()
-        verbose_ping(worker)
+        verbose_ping(worker, numDataBytes=PacketSize)
         q.task_done()
 
 q = Queue()
 
 if __name__ == '__main__':
-    # These should work:
-    # verbose_ping("heise.de")
-    # verbose_ping("google.com")
+    signal.signal(signal.SIGINT, signal_handler)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, signal_handler)
 
-    q.put("heise.de")
-    q.put("google.com")
+    parser = ArgumentParser()
+    parser.add_argument('-l', '--List', action='store', dest='finalList',
+                        type=str, nargs='+',
+                        help="Examples: -l host1 item2, -l host2.... string input type")
 
-    for x in range(5):
+    parser.add_argument('--PacketSize', help="Size of packets for ping", type=int)
+    parser.add_argument('--timeOut', help="timeout of each port", type=float)
+
+    opts = parser.parse_args()
+    if opts.timeOut is not None :
+       timeout = opts.timeOut
+    else:
+        timeout = 1000
+
+    if opts.PacketSize is not None:
+       PacketSize = opts.PacketSize
+
+    for i in opts.finalList:
+        q.put(i)
+
+    for x in range(8):
         t = threading.Thread(target=threader)
         t.daemon = True
         t.start()
 
     q.join()
-    # # Inconsistent on Windows w/ ActivePython (Python 3.2 resolves correctly
-    # # to the local host, but 2.7 tries to resolve to the local *gateway*)
-    # verbose_ping("localhost")
-    #
-    # # Should fail with 'getaddrinfo failed':
-    # verbose_ping("foobar_url.foobar")
-    #
-    # # Should fail (timeout), but it depends on the local network:
-    # verbose_ping("192.168.255.254")
-    #
-    # # Should fails with 'The requested address is not valid in its context':
-    # verbose_ping("0.0.0.0")
-
-# =============================================================================#
+    time.sleep(10)
