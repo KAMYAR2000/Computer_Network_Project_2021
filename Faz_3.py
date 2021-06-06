@@ -99,7 +99,12 @@ def total(host, ttl, timeout, max_tries, packet_size):
         if tries[i] == 0:
             trystr.append('*')
         else:
-            trystr.append(tries[i][0] + '-' + str(tries[i][1]) + 'ms')
+            try:
+                data = socket.gethostbyaddr(tries[i][0])
+                name = repr(data[0])
+                trystr.append(tries[i][0] + '->' + name + '-' + str(tries[i][1]) + 'ms')
+            except Exception:
+                trystr.append(tries[i][0] + '-' + str(tries[i][1]) + 'ms')
 
     final_string = ""
     for i in range(0, max_tries):
@@ -118,13 +123,13 @@ def create_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('destination_server')
     parser.add_argument('-c', '--count', required=False, default=3, type=int, metavar='Count of packets')
-    parser.add_argument('-t', '--timeout', required=False, default=3, type=int, metavar='Timeout in ms')
+    parser.add_argument('-t', '--timeout', required=False, default=1, type=int, metavar='Timeout in ms')
     parser.add_argument('-m', '--maxhops', required=False, default=30, type=int, metavar='Max hops')
     parser.add_argument('-i', '--initialTTL', required=False, default=1, type=int, metavar='initial TTL')
     parser.add_argument('-p', '--packet_size', required=False, default=55, type=int, metavar='Packet size in bytes')
     return parser
 
-def ready(destination_server, max_tries = 3, packet_size = 55, max_ttl = 30, initial_ttl= 1, timeout = 3):
+def ready(destination_server, max_tries = 3, packet_size = 55, max_ttl = 30, initial_ttl= 1, timeout = 1):
     host_ = socket.gethostbyname(destination_server)
     print('myTraceRoute to ' + destination_server + ' (' + host_ + '), ' + str(max_ttl) +
           ' maximum TTL.')
