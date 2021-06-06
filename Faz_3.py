@@ -117,12 +117,11 @@ def total(host, ttl, timeout, max_tries, packet_size):
 def create_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('destination_server')
-    parser.add_argument('-c', '--count', required=False, nargs='?', default=3, type=int, metavar='Count of packets')
-    parser.add_argument('-t', '--timeout', required=False, nargs='?', default=3, type=int, metavar='Timeout in ms')
-    parser.add_argument('-m', '--maxhops', required=False, nargs='?', default=64, type=int, metavar='Max hops')
-    parser.add_argument('-i', '--initialTTL', required=False, nargs='?', default=1, type=int, metavar='initial TTL')
-    parser.add_argument('-p', '--packet_size', required=False, nargs='?', default=55, type=int,
-                        metavar='Packet size in bytes')
+    parser.add_argument('-c', '--count', required=False, default=3, type=int, metavar='Count of packets')
+    parser.add_argument('-t', '--timeout', required=False, default=3, type=int, metavar='Timeout in ms')
+    parser.add_argument('-m', '--maxhops', required=False, default=30, type=int, metavar='Max hops')
+    parser.add_argument('-i', '--initialTTL', required=False, default=1, type=int, metavar='initial TTL')
+    parser.add_argument('-p', '--packet_size', required=False, default=55, type=int, metavar='Packet size in bytes')
     return parser
 
 def ready(destination_server, max_tries = 3, packet_size = 55, max_ttl = 30, initial_ttl= 1, timeout = 3):
