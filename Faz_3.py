@@ -95,7 +95,7 @@ def total(host, ttl, timeout, max_tries, packet_size):
     for i in range (0 , max_tries):
         tries.append(do_one(host, ttl, timeout, packet_size))
 
-    for i in range(0, max_tries ):
+    for i in range(0, max_tries):
         if tries[i] == 0:
             trystr.append('*')
         else:
